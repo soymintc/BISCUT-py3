@@ -10,18 +10,28 @@
 
 __author__ = 'jshih'
 
-import pandas as pd
 import os
+import argparse
+import pandas as pd
 import multiprocessing as mp
 
+#amplitude_threshold = 0.2
+#tumor_type = 'PANCAN'
+#seg_file_suffix = '_ISAR.seg.txt'
+#n_proc = 8 
+#date_suffix = '2022_07_26'
 
-amplitude_threshold = 0.2
-chromosome_coordinates = 'docs/SNP6_hg19_chromosome_locs_200605.txt'
-tumor_type = 'PANCAN'
-seg_file_suffix = '_ISAR.seg.txt'
-n_proc = 8 
-date_suffix = '2022_07_26'
-
+def parse_args():
+    desc = 'Preprocess CN data for BISCUT'
+    p = argparse.ArgumentParser(description=desc, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument('-t', '--tumor_type', help='Tumor type description', required=True)
+    p.add_argument('-s', '--seg_file_suffix', help='Segmentation file suffix', default='_ISAR.seg.txt')
+    p.add_argument('-n', '--n_proc', help='Number of processors to use', default=8)
+    p.add_argument('-amp', '--amplitude_threshold', help='Amplitude threshold', default=0.2)
+    p.add_argument('-g', '--genome_version', help='Genome version', default='hg19') # TODO: expand to hg38
+    p.add_argument('-d', '--date_suffix', help='Date suffix', default='2023_07_27')
+    args = p.parse_args()
+    return args
 
 #for given length n that is 2 or greater, give list of tuples between each element
 def junctions(n):
@@ -30,7 +40,8 @@ def junctions(n):
         res.append((i,i+1))
     return res
 
-def do_arm(arm, tumortype, aneu, date, threshold=amplitude_threshold):
+def do_arm(arm, tumortype, aneu, date, threshold, seg_file_suffix):
+    chromosome_coordinates = 'docs/SNP6_hg19_chromosome_locs_200605.txt'
     info = pd.read_csv(chromosome_coordinates,sep='\t',index_col='chromosome_info').transpose().to_dict()
     if str(arm) in ['13','14','15','21','22']:
         coord = (info[int(arm)]['q_start'], info[int(arm)]['q_end'])
@@ -50,8 +61,12 @@ def do_arm(arm, tumortype, aneu, date, threshold=amplitude_threshold):
 
 
 def preprocess_seg(arm, coord,segdfloc,js=4):
+    int_chroms = [str(c) for c in range(1, 22+1)]
     segdf = pd.read_csv(segdfloc, sep='\t', index_col='Sample')
     segdf = segdf[segdf['Num_Probes']>=js]
+    int_chrom_ix = segdf.Chromosome.isin(int_chroms)
+    segdf.loc[int_chrom_ix, 'Chromosome'] = segdf.loc[int_chrom_ix, 'Chromosome'].astype(int)
+
     if arm.endswith('p'):
         chr = int(arm[:-1])
         segdf = segdf[segdf['Chromosome'] == chr]
@@ -239,17 +254,24 @@ def join_segs(joined_alt_segments, arm, telcent):
 
 
 
-def take_care_arms(tt,date):
+def take_care_arms(tt, date, n_proc, threshold, suffix):
     pool = mp.Pool(n_proc)
     arms_list = ['13','14','15','21','22'] + [str(i)+'q' for i in range(1,23) if i not in [13,14,15,21,22]] + [str(i)+'p' for i in range(1,23) if i not in [13,14,15,21,22]]
     if not os.path.isdir('breakpoint_files_'+date): os.mkdir('breakpoint_files_'+date)
     if not os.path.isdir('breakpoint_files_'+date+'/'+ tt): os.mkdir('breakpoint_files_'+date+'/'+tt)
-    results = [pool.apply_async(do_arm, args=(arm,tt,'amp',date)) for arm in arms_list] + [pool.apply_async(do_arm, args=(arm,tt,'del',date)) for arm in arms_list]
+    results = ([pool.apply_async(do_arm, args=(arm,tt,'amp',date,threshold,suffix)) for arm in arms_list] + 
+               [pool.apply_async(do_arm, args=(arm,tt,'del',date,threshold,suffix)) for arm in arms_list])
     for result in results:
-      result.get(9999999)
+        result.get(9999999)
     pool.close()
     pool.join()
 
 if __name__=='__main__':
-    take_care_arms(tumor_type, date_suffix)
+    args = parse_args()
+    tumor_type = args.tumor_type
+    seg_file_suffix = args.seg_file_suffix
+    date_suffix = args.date_suffix
+    n_proc = args.n_proc
+    amplitude_threshold = args.amplitude_threshold
+    take_care_arms(tumor_type, date_suffix, n_proc, amplitude_threshold, seg_file_suffix)
 
