@@ -1,0 +1,5 @@
+metadata: /juno/work/shah/users/chois7/metacohort/paths.WGS-REMIXT-POSTPROCESS.tsv
+project: Metacohort
+
+log_dir: logs
+tmp_dir: tmp

@@ -1,0 +1,66 @@
+import os
+import yaml
+import pandas as pd
+import wgs_analysis.utils.parser as parser
+
+CHROMS = [str(c) for c in range(1, 22+1)] + ['X', 'Y']
+CHROMS = ['chr'+c for c in CHROMS]
+configfile: "config.yaml"
+metadata = config['metadata']
+project = config['project']
+SAMPLES = pd.read_table(metadata)['isabl_sample_id'].unique()
+
+log_dir = config['log_dir']
+tmp_dir = config['tmp_dir']
+for dir_path in [log_dir, tmp_dir]:
+    if not os.path.exists(dir_path):
+        os.system(f"mkdir {dir_path}")
+
+def make_sample_biscut_data(remixt_path, sample, ploidy):
+    num_probes = 10
+    biscut_cols = 'Sample Chromosome Start End Num_Probes Segment_Mean'.split(' ')
+    remixt = pd.read_csv(remixt_path, sep='\t')
+    merged = parser.merge_segments(remixt).reset_index(drop=True)
+    merged.rename(columns={'chromosome':'Chromosome', 'start':'Start', 'end':'End'}, inplace=True)
+    merged['Sample'] = sample
+    merged['total_cn'] = merged['major_1'] + merged['minor_1']
+    merged['Segment_Mean'] = merged['total_cn'] / ploidy
+    merged['Num_Probes'] = num_probes
+    return merged[biscut_cols]
+
+rule all:
+    input: 
+        f'results/{project}.cn.tsv'
+
+rule make_biscut_input:
+    input:
+        metadata=metadata,
+    output:
+        biscut=os.path.join(tmp_dir, '{sample}.cn.tsv'),
+    params:
+        metadata=metadata,
+    run:
+        paths_path = params.metadata
+        paths = pd.read_table(paths_path)
+        meta_paths = paths[paths['result_type']=='meta']
+        paths = paths[paths['result_type']=='remixt_cn']
+        sample2path = dict(zip(paths['isabl_sample_id'], paths['result_filepath']))
+        sample2meta_path = dict(zip(meta_paths['isabl_sample_id'], meta_paths['result_filepath']))
+        path = sample2path[wildcards.sample]
+        meta_path = sample2meta_path[wildcards.sample]
+        ploidy = yaml.load(open(meta_path), Loader=yaml.Loader)['ploidy']
+        df = make_sample_biscut_data(path, wildcards.sample, ploidy)
+        df.to_csv(output.biscut, index=False, sep='\t')
+
+rule merge_biscut:
+    input:
+        expand(os.path.join(tmp_dir, '{sample}.cn.tsv'), sample=SAMPLES),
+    output:
+        biscut=f'results/{project}.cn.tsv'
+    run:
+        merged = pd.DataFrame()
+        for sample_path in input:
+            df = pd.read_table(sample_path)
+            merged = pd.concat([merged, df])
+        merged.to_csv(output.biscut, sep='\t', index=False)
+
